@@ -726,6 +726,7 @@ async function startApp(session) {
   subscribeToEmergencies();
   checkActiveEmergencies();
   requestPushPermission();
+  loadBWHolidays();
 }
 
 async function refreshData(uid) {
@@ -885,84 +886,50 @@ async function toggleCheck(ds,gid) {
 }
 window.toggleCheck=toggleCheck;
 
-// ── FERIEN & FEIERTAGE BADEN-WÜRTTEMBERG ─────────────────────────────────────
-function getBWHolidays(year) {
-  // Ostern berechnen (Gaußsche Formel)
-  function easter(y) {
-    const a=y%19,b=Math.floor(y/100),c=y%100,d=Math.floor(b/4),e=b%4,
-      f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3),h=(19*a+b-d-g+15)%30,
-      i=Math.floor(c/4),k=c%4,l=(32+2*e+2*i-h-k)%7,
-      m=Math.floor((a+11*h+22*l)/451),
-      month=Math.floor((h+l-7*m+114)/31),day=((h+l-7*m+114)%31)+1;
-    return new Date(y,month-1,day);
+// ── FERIEN & FEIERTAGE BADEN-WÜRTTEMBERG (automatisch via API) ────────────────
+const BW_HOLIDAYS = {}; // Cache: { "2025-07-31": "Sommerferien", ... }
+
+async function loadBWHolidays() {
+  const currentYear = new Date().getFullYear();
+  const years = [currentYear - 1, currentYear, currentYear + 1, currentYear + 2];
+
+  for (const year of years) {
+    try {
+      // Schulferien laden (schulferien-api.de)
+      const ferienRes = await fetch(`https://schulferien-api.de/api/v1/${year}/BW/`);
+      if (ferienRes.ok) {
+        const ferien = await ferienRes.json();
+        ferien.forEach(f => {
+          const start = new Date(f.start);
+          const end = new Date(f.end);
+          const name = f.name_cp || f.name || 'Schulferien';
+          for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+            const ds = fmtD(new Date(d));
+            BW_HOLIDAYS[ds] = name;
+          }
+        });
+      }
+    } catch(e) { console.warn('Schulferien API Fehler:', e); }
+
+    try {
+      // Gesetzliche Feiertage laden (feiertage-api.de)
+      const feiertageRes = await fetch(`https://feiertage-api.de/api/?jahr=${year}&nur_land=BW`);
+      if (feiertageRes.ok) {
+        const feiertage = await feiertageRes.json();
+        Object.entries(feiertage).forEach(([name, obj]) => {
+          if (obj.datum) BW_HOLIDAYS[obj.datum] = name;
+        });
+      }
+    } catch(e) { console.warn('Feiertage API Fehler:', e); }
   }
-  const os=easter(year);
-  const add=(d,days)=>{const r=new Date(d);r.setDate(r.getDate()+days);return r;};
-  const fmt=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  const range=(from,to,name)=>{const arr=[];const s=new Date(from),e=new Date(to);for(let d=new Date(s);d<=e;d.setDate(d.getDate()+1))arr.push({date:fmt(new Date(d)),name});return arr;};
 
-  const holidays = [];
-
-  // Gesetzliche Feiertage BW
-  const feiertage = [
-    {date:`${year}-01-01`,name:'Neujahr'},
-    {date:`${year}-01-06`,name:'Heilige Drei Könige'},
-    {date:fmt(add(os,-2)),name:'Karfreitag'},
-    {date:fmt(os),name:'Ostersonntag'},
-    {date:fmt(add(os,1)),name:'Ostermontag'},
-    {date:`${year}-05-01`,name:'Tag der Arbeit'},
-    {date:fmt(add(os,39)),name:'Christi Himmelfahrt'},
-    {date:fmt(add(os,49)),name:'Pfingstsonntag'},
-    {date:fmt(add(os,50)),name:'Pfingstmontag'},
-    {date:fmt(add(os,60)),name:'Fronleichnam'},
-    {date:`${year}-10-03`,name:'Tag der Deutschen Einheit'},
-    {date:`${year}-11-01`,name:'Allerheiligen'},
-    {date:`${year}-12-25`,name:'1. Weihnachtstag'},
-    {date:`${year}-12-26`,name:'2. Weihnachtstag'},
-  ];
-  holidays.push(...feiertage);
-
-  // Schulferien BW (2024/2025 und 2025/2026)
-  const ferien = [
-    // 2024/2025
-    ...range(`${year}-01-07`,`${year}-01-18`,'Weihnachtsferien'),
-    ...range(`${year}-02-10`,`${year}-02-21`,'Faschingsferien'),
-    ...range(`${year}-04-14`,`${year}-04-25`,'Osterferien'),
-    ...range(`${year}-06-10`,`${year}-06-21`,'Pfingstferien'),
-    ...range(`${year}-07-31`,`${year}-09-13`,'Sommerferien'),
-    ...range(`${year}-10-28`,`${year}-10-31`,'Herbstferien'),
-    ...range(`${year}-12-22`,`${year}-12-31`,'Weihnachtsferien'),
-    // Vorjahr Weihnachten
-    ...range(`${year-1}-12-23`,`${year-1}-12-31`,'Weihnachtsferien'),
-    ...range(`${year+1}-01-01`,`${year+1}-01-04`,'Weihnachtsferien'),
-    // 2025/2026
-    ...range(`${year}-01-01`,`${year}-01-05`,'Weihnachtsferien'),
-    ...range(`2025-03-03`,`2025-03-14`,'Osterferien'),
-    ...range(`2025-06-10`,`2025-06-20`,'Pfingstferien'),
-    ...range(`2025-07-31`,`2025-09-12`,'Sommerferien'),
-    ...range(`2025-10-27`,`2025-10-31`,'Herbstferien'),
-    ...range(`2025-12-22`,`2026-01-06`,'Weihnachtsferien'),
-    ...range(`2026-02-16`,`2026-02-27`,'Faschingsferien'),
-    ...range(`2026-03-30`,`2026-04-10`,'Osterferien'),
-  ];
-  holidays.push(...ferien);
-
-  // Als Map zurückgeben: date -> name
-  const map = {};
-  holidays.forEach(h=>{ map[h.date] = h.name; });
-  return map;
+  // Kalender neu rendern sobald Daten da sind
+  reRenderActive();
+  console.log(`✅ BW Ferien & Feiertage geladen (${Object.keys(BW_HOLIDAYS).length} Tage)`);
 }
 
-// Cache für Feiertage (mehrere Jahre)
-const BW_HOLIDAYS = {};
-function getBWHolidayMap(year) {
-  if (!BW_HOLIDAYS[year]) BW_HOLIDAYS[year] = getBWHolidays(year);
-  return BW_HOLIDAYS[year];
-}
 function isHolidayOrFerien(ds) {
-  const year = parseInt(ds.split('-')[0]);
-  const map = getBWHolidayMap(year);
-  return map[ds] || null; // gibt Name zurück oder null
+  return BW_HOLIDAYS[ds] || null;
 }
 
 // ── CHECK-KALENDER ────────────────────────────────────────────────────────────
